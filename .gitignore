@@ -128,5 +128,6 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# Django sqlite3
+# Django
 *.sqlite3
+migrations/

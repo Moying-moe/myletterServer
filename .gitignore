@@ -131,3 +131,6 @@ dmypy.json
 # Django
 *.sqlite3
 migrations/
+
+# secret infos
+secret_infos.py

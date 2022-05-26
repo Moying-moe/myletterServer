@@ -19,9 +19,10 @@ from django.core import cache
 
 from api.data import LocationName
 from api.models import *
+from . import secret_infos
 
 
-PASSWORD_SALT = 'VL~*rNwOTkjlw+/D9EJ3FOnERsvO80'
+PASSWORD_SALT = secret_infos.PASSWORD_SALT
 RSESSION_CACHE_EXP = 1800 # refresh会话缓存的有效时间 0.5小时
 VERIFY_CODE_EXP = 180 # 验证码的有效期
 
@@ -335,7 +336,7 @@ class VerifyCode:
     # draws
     WIDTH = 120
     HEIGHT = 50
-    VERIFY_CODE_SALT = 'Z305qHnA23ByD%*3A7^I3*XaL*jq^Q54'
+    VERIFY_CODE_SALT = secret_infos.VERIFY_CODE_SALT
     
     code:Optional[str] = None
     img:Optional[Image.Image] = None

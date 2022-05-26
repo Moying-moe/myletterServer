@@ -115,7 +115,7 @@ class Tools:
             return None
         
     @staticmethod
-    def getReFunc(pattern:str, flags=0, full_match:bool = True) -> Callable:
+    def getReFunc(pattern:str, flags=0, full_match:bool = True) -> Callable[...,bool]:
         if full_match:
             if pattern[0] != '^':
                 pattern = '^' + pattern

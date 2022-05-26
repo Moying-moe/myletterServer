@@ -100,6 +100,8 @@ class RegisterInterface(APIInterface):
     -> username: 用户名 4-30字符 字母数字和@-_*%+ 不重复
     -> password: 密码 6-25字符 字母数字和@-_*%+
     -> nickname: 昵称 2-30字符
+    -> randomkey: 验证码随机key
+    -> verifycode: 验证码
     
     <- message: 'success' 表示注册成功
     '''
@@ -107,12 +109,21 @@ class RegisterInterface(APIInterface):
     args: Dict[str, Tuple] = {
         'username': (str, Tools.getReFunc(r'[a-zA-Z0-9@\-_\*%]{4,30}')),
         'password': (str, Tools.getReFunc(r'[a-zA-Z0-9@\-_\*%]{6,25}')),
-        'nickname': (str, Tools.getReFunc(r'.{2,30}'))
+        'nickname': (str, Tools.getReFunc(r'.{2,30}')),
+        'randomkey': (str, None),
+        'verifycode': (str, None)
     }
     allow_errors: List[int] = [JsonResponse.ERR_INPUT_USERNAME, JsonResponse.ERR_INPUT_USERNAME_UNIQUE,
-                               JsonResponse.ERR_INPUT_PASSWORD, JsonResponse.ERR_INPUT_NICKNAME]
+                               JsonResponse.ERR_INPUT_PASSWORD, JsonResponse.ERR_INPUT_NICKNAME,
+                               JsonResponse.ERR_VERIFY_CODE_FAIL]
     
-    def logic(self, username, password, nickname):
+    def logic(self, username, password, nickname, randomkey, verifycode):
+        # 验证码是否正确？
+        vc = VerifyCode(randomkey)
+        if not vc.isCodeRight(verifycode):
+            self.error = JsonResponse.ERR_VERIFY_CODE_FAIL
+            return False
+        
         vpos = VirtualLocation.getRandomPosition()
         vlocation = VirtualLocation.createLocationByPos(vpos)
         vlocation.save()
@@ -130,3 +141,42 @@ class RegisterInterface(APIInterface):
             'message': 'success'
         }
         return True
+
+class UsernameAvailableInterface(APIInterface):
+    '''
+    用户名是否可用
+    -> username: 欲使用的用户名
+    
+    <- availability: bool, 是否可用
+    <- reason: 如果不可用，原因。'UNIQUE': 重复, 'LIMIT': 约束不符合
+    '''
+    methods: List[str] = ['POST']
+    args: Dict[str, Tuple] = {
+        'username': (str, None)
+    }
+    allow_errors: List[int] = []
+    
+    def logic(self, username):
+        if not Tools.getReFunc(r'[a-zA-Z0-9@\-_\*%]{4,30}')(username):
+            # 不符合约束
+            self.result = {
+                'availability': False,
+                'reason': 'LIMIT'
+            }
+            return True
+        try:
+            user = User.objects.get(username = username)
+        except User.DoesNotExist:
+            # 没找到 说明是unique的
+            self.result = {
+                'availability': True,
+                'reason': ''
+            }
+            return True
+        else:
+            # 找到了 已被使用
+            self.result = {
+                'availability': False,
+                'reason': 'UNIQUE'
+            }
+            return True

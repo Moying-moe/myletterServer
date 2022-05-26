@@ -17,14 +17,14 @@ from django.utils.decorators import classonlymethod
 from django.views.decorators.csrf import csrf_exempt
 from django.core import cache
 
-from api.data import LocationName
-from api.models import *
+from .data import LocationName
 from . import secret_infos
 
 
 PASSWORD_SALT = secret_infos.PASSWORD_SALT
 RSESSION_CACHE_EXP = 1800 # refresh会话缓存的有效时间 0.5小时
 VERIFY_CODE_EXP = 180 # 验证码的有效期
+TOKEN_DURATION = 300 # access token的有效期 不宜过长
 
 
 class GlobalVars:
@@ -41,6 +41,8 @@ class GlobalVars:
     def __init__(self):
         # init availableLocations
         # TODO: 应该做个持久化，不然每次重启服务器都要跑一边user表。有空再弄
+        from .models import User
+        
         usedLocations = []
         users = User.objects.all()
         for user in users:
@@ -64,16 +66,57 @@ class ErrorNotAllow(BaseException):
 
 class Tools:
     @staticmethod
-    def getSHA256(string, encoding:str="utf-8") -> str:
+    def getSHA256(string:str, encoding:str="utf-8") -> str:
         bstring = string.encode(encoding)
         s = sha256(bstring)
         return s.hexdigest()
 
     @staticmethod
-    def getMD5(string, encoding:str="utf-8") -> str:
+    def getMD5(string:str, encoding:str="utf-8") -> str:
         bstring = string.encode(encoding)
         m = md5(bstring)
         return m.hexdigest()
+    
+    @staticmethod
+    def base64Encode(string:str, encoding:str="utf-8") -> str:
+        bstring = string.encode(encoding)
+        b = base64.b64encode(bstring)
+        return b.decode('utf-8')
+    
+    @staticmethod
+    def base64Dncode(string:str, encoding:str="utf-8") -> str:
+        bstring = string.encode('utf-8')
+        b = base64.b64decode(bstring)
+        return b.decode(encoding)
+    
+    @staticmethod
+    def bytesXOR(_bytes1:bytes, _bytes2:bytes) -> bytes:
+        res = []
+        i = 0
+        for b1, b2 in zip(_bytes1, _bytes2):
+            res.append(b1^b2)
+            i += 1
+        return bytes(res)
+    
+    @staticmethod
+    def HMAC(string:str, key:bytes, hash_func:Callable[...,str], group_size:int, encoding:str='utf-8') -> str:
+        HMAC_IPAD = bytes((0x5c for _ in range(group_size//8)))
+        HMAC_OPAD = bytes((0x36 for _ in range(group_size//8)))
+        message = string.encode(encoding)
+
+        if len(key)*8 < group_size:
+            delta = group_size - len(key)*8
+            if delta % 8 != 0:
+                raise KeyError
+            key += bytes(delta//8)
+        elif len(key)*8 > group_size:
+            key = hash_func(key).encode('utf-8')
+        
+        i_key_pad = Tools.bytesXOR(key, HMAC_IPAD)
+        o_key_pad = Tools.bytesXOR(key, HMAC_OPAD)
+        hashsum1 = hash_func((i_key_pad + message).decode('utf-8')).encode('utf-8')
+        hashsum2 = hash_func((o_key_pad + hashsum1).decode('utf-8'))
+        return hashsum2
 
     @staticmethod
     def renderJson(obj:Any) -> HttpResponse:
@@ -135,6 +178,8 @@ class JsonResponse:
     ERR_METHOD = 102
     ERR_LOGIN_FAIL = 200
     ERR_VERIFY_CODE_FAIL = 201
+    ERR_SESSION_FAIL = 202
+    ERR_TOKEN_ACCESS_DENIED = 203
     ERR_INPUT_USERNAME = 300
     ERR_INPUT_USERNAME_UNIQUE = 301
     ERR_INPUT_PASSWORD = 302
@@ -147,6 +192,8 @@ class JsonResponse:
         # 身份验证错误
         ERR_LOGIN_FAIL: "登录失败 用户名或密码错误",
         ERR_VERIFY_CODE_FAIL: "验证码错误 或验证码已过期",
+        ERR_SESSION_FAIL: "会话验证失败 无效或错误的会话",
+        ERR_TOKEN_ACCESS_DENIED: "权限令牌无效或已过期",
         # 输入约束类错误
         ERR_INPUT_USERNAME: "用户名不符合规范",
         ERR_INPUT_USERNAME_UNIQUE: "用户名已被使用",
@@ -276,7 +323,7 @@ class RequestArgsVerify:
                 # 只做类型验证 不做数值验证
                 continue
 
-            if self.args[k][0] is None:
+            if self.args[k][0] is None or callable(self.args[k][1]):
                 # 用户自定义检查函数
                 if not self.args[k][1](self.data[k]):
                     return self.args[k][2]

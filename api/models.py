@@ -5,9 +5,10 @@ import random
 
 from django.db import models
 from django.core import cache
+from . import secret_infos
 
-from api.data import LocationName
-from api.logic import RSESSION_CACHE_EXP, GlobalVars, Tools
+from .data import LocationName
+from .logic import RSESSION_CACHE_EXP, GlobalVars, Tools
 
 # Create your models here.
 
@@ -136,7 +137,7 @@ class User(models.Model):
         return sessionCode
     
     @staticmethod
-    def verifySession(username, sessionCode:str) -> bool:
+    def verifySession(username:str, sessionCode:str) -> bool:
         rsessionCache = cache.caches['rsession']
         rightSessionCode = rsessionCache.get(username, '!NOCACHE!')
         if rightSessionCode != '!NOCACHE!':
@@ -148,6 +149,106 @@ class User(models.Model):
         rightSessionCode = user.session
         return sessionCode == rightSessionCode and rightSessionCode is not None
     
+    @staticmethod
+    def createToken(username:str, signtime:int, duration:int, scope:str) -> str:
+        version = 1
+        hashfunc = 'SHA256'
+        expiration = signtime + duration
+        randomstr = Tools.getRandomString(32)
+        
+        tokenHead = f'{version},{hashfunc},{scope}'
+        tokenHead = Tools.base64Encode(tokenHead)
+        tokenPayload = f'username={username},signtime={signtime},expiration={expiration},random={randomstr}'
+        tokenPayload = Tools.base64Encode(tokenPayload)
+        
+        tokenData = tokenHead + ':' + tokenPayload
+        tokenSign = Tools.HMAC(tokenData, secret_infos.TOKEN_HMAC_SALT, Tools.getSHA256, 512)
+        token = tokenData + ':' + tokenSign
+        return token
+
+    @staticmethod
+    def analyzeToken(token:str, opScope:Optional[str]=None) -> Dict:
+        # 先验证是否被篡改
+        try:
+            tokenHead, tokenPayload, tokenSign = token.split(':')
+        except Exception as e:
+            print(e)
+            return {
+                'success': False,
+                'reason': 'FORMAT'
+            }
+        tokenData = tokenHead + ':' + tokenPayload
+        sign = Tools.HMAC(tokenData, secret_infos.TOKEN_HMAC_SALT, Tools.getSHA256, 512)
+        if sign != tokenSign:
+            return {
+                'success': False,
+                'reason': 'SIGN'
+            }
+        
+        # 然后验证有效期
+        tokenHead = Tools.base64Dncode(tokenHead)
+        tokenPayload = Tools.base64Dncode(tokenPayload)
+        
+        version, hashfunc, authScope = tokenHead.split(',')
+        # 验证scope是否有权限
+        if opScope is not None and authScope != '*':
+            authScopeTuple:Tuple = tuple(authScope.split('.'))
+            opScopeTuple:Tuple = tuple(authScope.split('.'))
+            if len(authScopeTuple) > len(opScopeTuple):
+                # 权限scope比操作scope还长 那么必然没有权限
+                return {
+                    'success': False,
+                    'reason': 'SCOPE'
+                }
+            authScopeTuple += tuple((None for _ in range(len(opScopeTuple) - len(authScopeTuple))))
+            for asitem, ositem in zip(authScopeTuple, opScopeTuple):
+                if asitem is None:
+                    break
+                if asitem != ositem:
+                    return {
+                        'success': False,
+                        'reason': 'SCOPE'
+                    }
+        
+        tokenPayloadList:List = tokenPayload.split(',')
+        payloadDict:Dict = {}
+        for payload in tokenPayloadList:
+            k,v = payload.split('=', 1)
+            payloadDict[k] = v
+        try:
+            username = payloadDict['username']
+            signtime = int(payloadDict['signtime'])
+            expiration = int(payloadDict['expiration'])
+        except Exception as e:
+            print(e)
+            return {
+                'success': False,
+                'reason': 'FORMAT'
+            }
+        
+        if expiration < Tools.getNow():
+            return {
+                'success': False,
+                'reason': 'EXPIRATION'
+            }
+        
+        return {
+            'success': True,
+            'data': {
+                'header': {
+                    'version': version,
+                    'hash_func': hashfunc,
+                    'scope': authScope
+                },
+                'payload': {
+                    'username': username,
+                    'signtime': signtime,
+                    'expiration': expiration
+                }
+            }
+        }
+
+
     @staticmethod
     def searchUserByLocation(city_name:str, block_name:str, community_name:str, 
                              building_index:int, room_index:int) -> Optional[User]:
@@ -164,9 +265,9 @@ class User(models.Model):
 
 class Letter(models.Model):
     # 信件
-    receiver = models.ForeignKey(User, on_delete=models.SET_NULL) # 收信人
+    receiver = models.ForeignKey(User, null=True, on_delete=models.SET_NULL, related_name="receiver") # 收信人
     receiver_alias = models.CharField(max_length=30) # 写信人给出的收信人姓名 可能和收信人nickname不一致
-    sender = models.ForeignKey(User, on_delete=models.SET_NULL) # 寄信人
+    sender = models.ForeignKey(User, null=True, on_delete=models.SET_NULL, related_name="sender") # 寄信人
     has_read = models.BooleanField(default=False) # 已读？
     send_time = models.DateTimeField(auto_now_add=True) # 发出时间
     recv_time = models.DateTimeField() # 接收时间 根据二者虚拟距离计算得出

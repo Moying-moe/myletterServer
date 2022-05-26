@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import *
 
 from django.db import IntegrityError
-from api.logic import APIInterface, JsonResponse, Tools, VerifyCode
+from .logic import TOKEN_DURATION, APIInterface, JsonResponse, Tools, VerifyCode
 from .models import *
 
 # Create your views here.
@@ -107,9 +107,9 @@ class RegisterInterface(APIInterface):
     '''
     methods: List[str] = ['POST']
     args: Dict[str, Tuple] = {
-        'username': (str, Tools.getReFunc(r'[a-zA-Z0-9@\-_\*%]{4,30}')),
-        'password': (str, Tools.getReFunc(r'[a-zA-Z0-9@\-_\*%]{6,25}')),
-        'nickname': (str, Tools.getReFunc(r'.{2,30}')),
+        'username': (str, Tools.getReFunc(r'[a-zA-Z0-9@\-_\*%]{4,30}'), JsonResponse.ERR_INPUT_USERNAME),
+        'password': (str, Tools.getReFunc(r'[a-zA-Z0-9@\-_\*%]{6,25}'), JsonResponse.ERR_INPUT_PASSWORD),
+        'nickname': (str, Tools.getReFunc(r'.{2,30}'), JsonResponse.ERR_INPUT_NICKNAME),
         'randomkey': (str, None),
         'verifycode': (str, None)
     }
@@ -180,3 +180,43 @@ class UsernameAvailableInterface(APIInterface):
                 'reason': 'UNIQUE'
             }
             return True
+        
+class RefreshAccessTokenInterface(APIInterface):
+    '''
+    使用refresh session刷新access token
+    -> username: 用户名
+    -> session: refresh session id
+    
+    <- token: access token
+    '''
+    methods: List[str] = ['POST']
+    args: Dict[str, Tuple] = {
+        'username': (str, None),
+        'session': (str, None)
+    }
+    allow_errors: List[int] = [JsonResponse.ERR_SESSION_FAIL]
+    
+    def logic(self, username, session):
+        if not User.verifySession(username, session):
+            self.error = JsonResponse.ERR_SESSION_FAIL
+            return False
+        
+        token = User.createToken(username, int(Tools.getNow()), TOKEN_DURATION, 'top.moyingmoe.myletter.access')
+        self.result = {
+            'token': token
+        }
+        return True
+    
+class AccessTokenTestInterface(APIInterface):
+    '''
+    测试token的接口
+    '''
+    methods: List[str] = ['GET','POST']
+    args: Dict[str, Tuple] = {
+        'token': (str, None)
+    }
+    allow_errors: List[int] = []
+    
+    def logic(self, token):
+        self.result = User.analyzeToken(token, 'top.moyingmoe.myletter.access')
+        return True

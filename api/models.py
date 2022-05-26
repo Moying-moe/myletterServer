@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Tuple
+from typing import *
 
 import random
 
@@ -21,15 +21,15 @@ class VirtualLocation(models.Model):
     room_index = models.SmallIntegerField() # 虚拟地址 门牌号
     # 虚拟地址形如：[幸福]城 [弄堂]区 [宣和花园] [30]幢 [207]
     
-    def getAddressInfo(self) -> Tuple[str,str,str,str,str]:
-        '''获取地址信息元组'''
+    def getAddressInfo(self) -> Tuple[int,int,int,int,int]:
+        '''获取地址id元组'''
         posx = self.position_x
         posy = self.position_y
         city_x = posx // 480
         city_y = posy // 480
         city_id = city_y*4 + city_x
-        posx %= 640
-        posy %= 640
+        posx %= 480
+        posy %= 480
         
         block_x = posx // 160
         block_y = posy // 160
@@ -52,16 +52,20 @@ class VirtualLocation(models.Model):
         room_ind = posy*4 + posx
         room_id = (room_ind//6+1)*100 + (room_ind%6+1)
         
-        return (LocationName.City[city_id], LocationName.Block[city_id][block_id],
-                LocationName.Community[city_id][block_id][community_id], str(building_id), str(room_id))
+        return (city_id, block_id, community_id, building_id, room_id)
 
     def getFullAddress(self, sep:str=' ') -> str:
         '''获取完整地址名'''
-        lInfo = list(self.getAddressInfo())
-        lInfo[0] += '城'
-        lInfo[1] += '区'
-        lInfo[3] += '幢'
+        lInfo = [
+            self.city_name + '城', self.block_name, self.community_name,
+            str(self.building_index) + '幢', str(self.room_index)
+        ]
         return sep.join(lInfo)
+    
+    def getPostCode(self) -> str:
+        # 获取邮编
+        city_id, block_id, community_id, _, _ = self.getAddressInfo()
+        return '%d%s'%(10+city_id, str(block_id*16+community_id).zfill(4))
     
     @staticmethod
     def createLocationByPos(pos:Tuple[int, int]) -> VirtualLocation:
@@ -72,8 +76,8 @@ class VirtualLocation(models.Model):
         city_x = posx // 480
         city_y = posy // 480
         city_id = city_y*4 + city_x
-        posx %= 640
-        posy %= 640
+        posx %= 480
+        posy %= 480
         
         block_x = posx // 160
         block_y = posy // 160
@@ -107,6 +111,7 @@ class VirtualLocation(models.Model):
         '''获取一个随机的可用坐标'''
         randi = random.randint(0, len(GlobalVars.getInstance().availableLocations)-1)
         return GlobalVars.getInstance().availableLocations.pop(randi)
+
 
 class User(models.Model):
     username = models.CharField(max_length=30, unique=True) # 用户名 唯一
@@ -142,3 +147,27 @@ class User(models.Model):
         user = User.objects.get(username=username)
         rightSessionCode = user.session
         return sessionCode == rightSessionCode and rightSessionCode is not None
+    
+    @staticmethod
+    def searchUserByLocation(city_name:str, block_name:str, community_name:str, 
+                             building_index:int, room_index:int) -> Optional[User]:
+        try:
+            user = User.objects.get(vlocation__city_name = city_name,
+                                    vlocation__block_name = block_name,
+                                    vlocation__community_name = community_name,
+                                    vlocation__building_index = building_index,
+                                    vlocation__room_index = room_index)
+        except User.DoesNotExist:
+            return None
+        return user
+
+
+class Letter(models.Model):
+    # 信件
+    receiver = models.ForeignKey(User, on_delete=models.SET_NULL) # 收信人
+    receiver_alias = models.CharField(max_length=30) # 写信人给出的收信人姓名 可能和收信人nickname不一致
+    sender = models.ForeignKey(User, on_delete=models.SET_NULL) # 寄信人
+    has_read = models.BooleanField(default=False) # 已读？
+    send_time = models.DateTimeField(auto_now_add=True) # 发出时间
+    recv_time = models.DateTimeField() # 接收时间 根据二者虚拟距离计算得出
+    content = models.TextField() # 信件正文
